@@ -31,7 +31,7 @@ This limits the connectivity of the resulting 3x3 convolution, preventing the ne
 ![denoise on](/samples/image_optimizer.png)
 ![denoise off](/samples/image_optimizer_noise.png)
 
-- URL: s3://oliland-public-datasets/lpsfs/weights/2021-09-20/image_optimizer.ckpt
+- URL: weights/image_optimizer.ckpt
 - Test MSE Loss: 0.0055 (88ms)
 - Test MSE Loss (denoise off): 0.0099 (80ms)
 
@@ -40,6 +40,6 @@ This limits the connectivity of the resulting 3x3 convolution, preventing the ne
 ![denoise on](/samples/image_optimizer_colors.png)
 ![denoise off](/samples/image_optimizer_colors_noise.png)
 
-- URL: s3://oliland-public-datasets/lpsfs/weights/2021-09-20/image_optimizer_colors.ckpt
+- URL: weights/image_optimizer_colors.ckpt
 - Test MSE Loss: 0.0038 (84ms)
 - Test MSE Loss (denoise off): 0.0118 (82ms)
