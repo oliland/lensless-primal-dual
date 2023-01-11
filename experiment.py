@@ -25,13 +25,9 @@ from lensless.model_colors import ImageOptimizerMixColors
 from lensless.training import TrainingSystem
 
 # Path to datasets
-DATASET_PATH = Path('/home/oliland/Datasets/lensless_learning')
 
 DEFAULT_LOGS_DIR = 'logs/'
 DEFAULT_RESULTS_DIR = 'results/'
-
-COLLECTION = LenslessLearningCollection(DATASET_PATH)
-WILD_DATASET = LenslessLearningInTheWild(DATASET_PATH / 'diffusercam_wild_images/')
 
 MODEL_CLASSES = {
     "learned-primal": ImageOptimizer,
@@ -104,9 +100,6 @@ def main():
     if args.train:
         fit_models(args)
 
-    if args.ground:
-        ground_truth(args)
-
     if args.eval:
         evaluate_trainable_models(args)
 
@@ -124,15 +117,14 @@ def main():
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
+    parser.add_argument('dataset_path', help="Path to Lensless Learning dataset")
     parser.add_argument('--eval', action="store_true", help="Evaluate trainable models")
     parser.add_argument('--train', action="store_true", help="Fit trainable models")
     parser.add_argument('--report', action="store_true", help="Generate report from evals")
-    parser.add_argument('--images', action="store_true", help="Generate images from evals")
+    parser.add_argument('--images', action="store_true", help="Write images from evaluated results")
     parser.add_argument('--version', default=0, help="Model version")
     parser.add_argument('--bench', action="store_true", help="Benchmark")
     parser.add_argument('--parameters', action="store_true", help="Show number of parameters")
-    parser.add_argument('--draft', action="store_true", help="Quick test")
-    parser.add_argument('--ground', action="store_true", help="Write ground truth images")
     parser.add_argument('--checkpoint')
     parser.add_argument('--disable-unet', action="store_true")
     parser.add_argument('--models', nargs='*', default=TRAINABLE_MODELS, choices=MODELS)
@@ -145,7 +137,7 @@ def parse_arguments():
 
 
 def fit_models(args):
-    collection = COLLECTION
+    collection = LenslessLearningCollection(args.dataset_path)
     for name in args.models:
         model = load_model_with_name(collection, name)
         model = load_training_system(name=name, model=model, region_of_interest=collection.region_of_interest)
@@ -185,7 +177,7 @@ def run_experiment(name, model, train_dataset, val_dataset, params):
     
 
 def show_trainable_model_parameters(args):
-    collection = COLLECTION
+    collection = LenslessLearningCollection(args.dataset_path)
 
     for name in args.models:
         if name not in TRAINABLE_MODELS:
@@ -212,7 +204,7 @@ def benchmark(model, inputs):
 
 
 def benchmark_trainable_models(args):
-    collection = COLLECTION
+    collection = LenslessLearningCollection(args.dataset_path)
 
     number = 100
     inputs = torch.zeros(1, *collection.psf.shape).to(device)
@@ -239,34 +231,14 @@ def benchmark_trainable_models(args):
 
 
 def generate_images(args):
-    collection = COLLECTION
+    collection = LenslessLearningCollection(args.dataset_path)
     
-    # Ground Truth
-    ground_truth = torch.zeros(len(collection.val_dataset), *collection.psf.shape)
-    for i in range(0, len(collection.val_dataset)):
-        _, y = collection.val_dataset[i]
-        ground_truth[i] = y
-    
-    write_images(region_of_interest(ground_truth), args.results / "ground_truth.png")
-
     for name in args.models:
         postprocess = name in POSTPROCESS_MODELS
-        
-        # Test measurements
-        figures = [x for x, y in TEST_DATASET]
-        write_images(figures, output_path(args, name, "measurements.png"))
-
-        # Train images
-        figures = load_images(results_path(args, name, "train.torch"), postprocess=postprocess)
-        write_images(figures, output_path(args, name, "train.png"))
 
         # Test images
-        figures = load_images(results_path(args, name, "test.torch"), postprocess=postprocess)
-        write_images(figures, output_path(args, name, "test.png"))
-
-        # Wild images
-        # figures = load_images(results_path(args, name, "wild.torch"), postprocess=postprocess)
-        # write_images(figures, output_path(args, name, "wild.png"))
+        images = load_images(results_path(args, name, "test.torch"), postprocess=postprocess)
+        write_images(images, args, name)
 
         # PSFs or Learned Models
         try:
@@ -277,22 +249,20 @@ def generate_images(args):
                 b, v, h, w = psfs.shape
                 c = 3
                 psfs = psfs.unsqueeze(2).tile(1, 1, c, 1, 1)
-            write_images(psfs.reshape(b * v, c, h, w).clip(0, 1), output_path(args, name, "psfs.png"))
+            write_images_grid(psfs.reshape(b * v, c, h, w).clip(0, 1), output_path(args, name, "psfs.png"))
         except FileNotFoundError:
             pass
     
         print(f"Wrote images for {name} to {args.results}")
 
 
-def stats_from_images(name, dataset, images, draft=False):
+def stats_from_images(name, dataset, images):
     output = []
     
-    limit = min(10, len(images)) if draft else len(images)
-
     mse_loss = torch.nn.MSELoss()
     lpips_loss = LPIPS(weights=VGG16_Weights.IMAGENET1K_V1)
 
-    for i in tqdm.trange(0, limit):
+    for i in tqdm.trange(0, len(images)):
         x, y = dataset[i]
         x = x.unsqueeze(0)
         y = region_of_interest(y.unsqueeze(0)).to(device)
@@ -322,17 +292,21 @@ def postprocess_images(image):
     return torch.flip(torch.clip(image, 0, 1), (1, 2))
 
 
-def write_images(images, path):
+def write_images(images, args, name):
+    for i in tqdm.trange(0, len(images)):
+        image = region_of_interest(images[i])
+        image = (image.cpu() * 255.).byte()
+        image_path = output_path(args, name, f"{i}.png")
+        torchvision.io.write_png(image, str(image_path))
+
+
+def write_images_grid(images, path):
     grid = torchvision.utils.make_grid([x.cpu() for x in images], nrow=5, padding=10)
     torchvision.io.write_png((grid * 255.).byte(), str(path))
 
 
 def evaluate_model_from_checkpoint(collection, name, logs_dir, version=0):
-    try:
-        checkpoint = torch.load(logs_dir / f"{name}/version_{version}/checkpoints/weights.ckpt", map_location=device)
-    except FileNotFoundError:
-        checkpoint = torch.load(logs_dir / f"{name}/version_{version}/checkpoints/weights-v1.ckpt", map_location=device)
-
+    checkpoint = torch.load(logs_dir / f"{name}/version_{version}/checkpoints/weights.ckpt", map_location=device)
     model = load_model_with_name(collection, name)
     model = EvaluationSystem(model=model, checkpoint=checkpoint)
     model.to(device)
@@ -348,15 +322,8 @@ def load_model_with_name(collection, name):
     return model_class(collection.psf, **TRAINABLE_MODELS[name])
 
 
-def ground_truth(args):
-    print("Writing ground truth images")
-    print(len(EVAL_DATASET))
-    torch.save(torch.stack([y for x, y in TEST_DATASET]), args.results / "ground_truth_test.torch")
-    torch.save(torch.stack([y for x, y in EVAL_DATASET]), args.results / "ground_truth_eval.torch")
-
-
 def evaluate_trainable_models(args):
-    collection = COLLECTION
+    collection = LenslessLearningCollection(args.dataset_path)
 
     for name in args.models:
         if name not in TRAINABLE_MODELS:
@@ -365,21 +332,13 @@ def evaluate_trainable_models(args):
 
         print(f"Generating images for {name}")
         
-        if args.draft:
-            print(f"Preparing results in DRAFT MODE")
-        
         model = evaluate_model_from_checkpoint(collection, name, args.logs, args.version)
-        print("Saving train images...")
-        torch.save(evaluate_model(collection, model, collection.train_dataset, draft=True, disable_unet=args.disable_unet), results_path(args, name, "train.torch"))
+        
+        # print("Saving train images...")
+        # torch.save(evaluate_model(collection, model, collection.train_dataset, disable_unet=args.disable_unet), results_path(args, name, "train.torch"))
 
         print("Saving test images...")
-        torch.save(evaluate_model(collection, model, collection.val_dataset, draft=args.draft, disable_unet=args.disable_unet), results_path(args, name, "test.torch"))
-        
-        print("Saving eval images...")
-        torch.save(evaluate_model(collection, model, EVAL_DATASET, draft=args.draft, disable_unet=args.disable_unet), results_path(args, name, "eval.torch"))
-        
-        # print("Saving wild images...")
-        # torch.save(evaluate_model(collection, model, WILD_DATASET, draft=args.draft, disable_unet=args.disable_unet, wild=True), results_path(args, name, "wild.torch"))
+        torch.save(evaluate_model(collection, model, collection.val_dataset, disable_unet=args.disable_unet), results_path(args, name, "test.torch"))
         
         if model.psfs is not None:
             print("Saving learned models...")
@@ -388,16 +347,11 @@ def evaluate_trainable_models(args):
     print("Finished evaluating models")
 
 
-def evaluate_model(collection, model, dataset, draft, disable_unet=False, wild=False):
-    limit = min(10, len(dataset)) if draft else len(dataset)
-
+def evaluate_model(collection, model, dataset, disable_unet=False):
     output = []
 
-    for i in tqdm.trange(0, limit):
-        if wild:
-            x, y = dataset[i], dataset[i]
-        else:
-            x, y = dataset[i * 10]
+    for i in tqdm.trange(0, len(dataset)):
+        x, y = dataset[i]
         x = x.unsqueeze(0).to(device)
         y = y.unsqueeze(0).to(device)
         output.append(model(x, denoise=not disable_unet)[0])
@@ -419,7 +373,10 @@ def results_path(args, model_name, result_name):
 
 
 def output_path(args, model_name, result_name):
-    experiment_name = model_name if args.disable_unet else f"{model_name}-denoise-off"
+    if args.disable_unet:
+        experiment_name = f"{model_name}-denoise-off"
+    else:
+        experiment_name = model_name
     output_dir = args.results / experiment_name
     os.makedirs(output_dir, exist_ok=True)
     return output_dir / result_name
