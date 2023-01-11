@@ -12,11 +12,14 @@ This directory contains training and evaluation code for Learned Point Spread Fu
 
 Download the full dataset from https://waller-lab.github.io/LenslessLearning/dataset.html.
 
-The below scripts will evaluate the model with the checked in weights, and save images from the test set as PNG files.
+The below scripts will evaluate the model with the checked in weights, and save images from the test set to a new `results` directory, both as a serialized PyTorch Tensor and PNG files.
 
 	python experiment.py \
 		/Datasets/lensless_learning/ \
-		--eval --model learned-primal-dual-and-five-models --checkpoint weights/image_optimizer.ckpt --images
+		--eval \
+		--model learned-primal-dual-and-five-models \
+		--checkpoint weights/image_optimizer.ckpt \
+		--images
 
 Run `python experiment.py -h` for help on the other command line switches, including training.
 
@@ -27,7 +30,10 @@ Run `python experiment.py -h` for help on the other command line switches, inclu
 
 ### image_optimizer:
 
+With U-Net postprocessing:
 ![denoise on](/samples/image_optimizer.png)
+
+Without:
 ![denoise off](/samples/image_optimizer_noise.png)
 
 Colors are hidden in the batch axis during training to preserve color information, at the cost of noise.
@@ -35,7 +41,10 @@ It's unclear what kind of noise this is.
 
 ### image_optimizer_colors:
 
+With U-Net postprocessing:
 ![denoise on](/samples/image_optimizer_colors.png)
+
+Without:
 ![denoise off](/samples/image_optimizer_colors_noise.png)
 
 PSF and Image colors are tiled 5 times when the image is input, once for each of the 5 learned PSFs.
