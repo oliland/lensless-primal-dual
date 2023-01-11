@@ -21,19 +21,17 @@ from lensless.diffusercam import (
 )
 from lensless.evaluate import EvaluationSystem
 from lensless.model import ImageOptimizer
-from lensless.model_color import ImageOptimizerMixColors
+from lensless.model_colors import ImageOptimizerMixColors
 from lensless.training import TrainingSystem
 
 # Path to datasets
-DATASETS_PATH = Path('datasets/')
+DATASET_PATH = Path('/home/oliland/Datasets/lensless_learning')
 
 DEFAULT_LOGS_DIR = 'logs/'
 DEFAULT_RESULTS_DIR = 'results/'
 
-COLLECTION = LenslessLearningCollection(DATASETS_PATH / 'diffusercam_train_images')
-EVAL_DATASET = LenslessLearning(DATASETS_PATH / 'diffusercam_train_images/', 0, 1000)
-TEST_DATASET = LenslessLearning(DATASETS_PATH / 'diffusercam_test_images/', 0, 5)
-WILD_DATASET = LenslessLearningInTheWild(DATASETS_PATH / 'diffusercam_wild_images/')
+COLLECTION = LenslessLearningCollection(DATASET_PATH)
+WILD_DATASET = LenslessLearningInTheWild(DATASET_PATH / 'diffusercam_wild_images/')
 
 MODEL_CLASSES = {
     "learned-primal": ImageOptimizer,
@@ -43,8 +41,6 @@ MODEL_CLASSES = {
     "learned-primal-dual-and-five-models": ImageOptimizer,
     "learned-primal-dual-and-color-mixing": ImageOptimizerMixColors,
 }
-
-DEFAULT_TRAINING_SYSTEM = TrainingSystem
 
 # List of models that this script can train and evaluate.
 TRAINABLE_MODELS = {
@@ -81,7 +77,7 @@ TRAINABLE_MODELS = {
 }
 
 
-# Benchmark models have not been}{{ re-trained, as this requires reproducing somebody elses environment exactly.
+# Benchmark models have not been re-trained, as this requires reproducing somebody elses environment exactly.
 # Instead, a separate script has loaded the weights, evaluated the above datasets, and stored the results in a tensor.
 # Having reproduced the exact outputs, we can re-evaluate these models using our own metrics.
 BENCHMARK_MODELS = {
@@ -138,10 +134,11 @@ def parse_arguments():
     parser.add_argument('--draft', action="store_true", help="Quick test")
     parser.add_argument('--ground', action="store_true", help="Write ground truth images")
     parser.add_argument('--checkpoint')
-    parser.add_argument('--denoise', action="store_true")
+    parser.add_argument('--disable-unet', action="store_true")
     parser.add_argument('--models', nargs='*', default=TRAINABLE_MODELS, choices=MODELS)
     parser.add_argument('--max-epochs', type=int, default=5)
-    parser.add_argument('--gpus', type=str, help="Pass [0] to use GPU 0")
+    parser.add_argument('--accelerator', type=str, default='gpu', help="Accelerator to use")
+    parser.add_argument('--devices', type=int, default=1, help="Number of devices to use")
     parser.add_argument('--logs', default=DEFAULT_LOGS_DIR, type=Path, help="Logs directory")
     parser.add_argument('--results', default=DEFAULT_RESULTS_DIR, type=Path, help="Results directory")
     return parser.parse_args()
@@ -162,10 +159,7 @@ def fit_models(args):
 
 
 def load_training_system(name, model, region_of_interest):
-    if name in TRAINING_SYSTEMS:
-        return TRAINING_SYSTEMS[name](model=model, region_of_interest=region_of_interest)
-    else:
-        return DEFAULT_TRAINING_SYSTEM(model=model, region_of_interest=region_of_interest)
+    return TrainingSystem(model=model, region_of_interest=region_of_interest)
 
 
 def run_experiment(name, model, train_dataset, val_dataset, params):
@@ -179,8 +173,9 @@ def run_experiment(name, model, train_dataset, val_dataset, params):
     ]
 
     trainer = Trainer(
+        accelerator=params.accelerator,
+        devices=params.devices,
         callbacks=callbacks,
-        gpus=params.gpus,
         max_epochs=params.max_epochs,
         logger=logger,
         resume_from_checkpoint=params.checkpoint,
@@ -375,16 +370,16 @@ def evaluate_trainable_models(args):
         
         model = evaluate_model_from_checkpoint(collection, name, args.logs, args.version)
         print("Saving train images...")
-        torch.save(evaluate_model(collection, model, collection.train_dataset, draft=True, denoise=args.denoise), results_path(args, name, "train.torch"))
+        torch.save(evaluate_model(collection, model, collection.train_dataset, draft=True, disable_unet=args.disable_unet), results_path(args, name, "train.torch"))
 
         print("Saving test images...")
-        torch.save(evaluate_model(collection, model, collection.val_dataset, draft=args.draft, denoise=args.denoise), results_path(args, name, "test.torch"))
+        torch.save(evaluate_model(collection, model, collection.val_dataset, draft=args.draft, disable_unet=args.disable_unet), results_path(args, name, "test.torch"))
         
         print("Saving eval images...")
-        torch.save(evaluate_model(collection, model, EVAL_DATASET, draft=args.draft, denoise=args.denoise), results_path(args, name, "eval.torch"))
+        torch.save(evaluate_model(collection, model, EVAL_DATASET, draft=args.draft, disable_unet=args.disable_unet), results_path(args, name, "eval.torch"))
         
         # print("Saving wild images...")
-        # torch.save(evaluate_model(collection, model, WILD_DATASET, draft=args.draft, denoise=args.denoise, wild=True), results_path(args, name, "wild.torch"))
+        # torch.save(evaluate_model(collection, model, WILD_DATASET, draft=args.draft, disable_unet=args.disable_unet, wild=True), results_path(args, name, "wild.torch"))
         
         if model.psfs is not None:
             print("Saving learned models...")
@@ -393,7 +388,7 @@ def evaluate_trainable_models(args):
     print("Finished evaluating models")
 
 
-def evaluate_model(collection, model, dataset, draft, denoise, wild=False):
+def evaluate_model(collection, model, dataset, draft, disable_unet=False, wild=False):
     limit = min(10, len(dataset)) if draft else len(dataset)
 
     output = []
@@ -405,7 +400,7 @@ def evaluate_model(collection, model, dataset, draft, denoise, wild=False):
             x, y = dataset[i * 10]
         x = x.unsqueeze(0).to(device)
         y = y.unsqueeze(0).to(device)
-        output.append(model(y, denoise=denoise)[0])
+        output.append(model(x, denoise=not disable_unet)[0])
     return torch.stack(output)
 
 
@@ -424,7 +419,7 @@ def results_path(args, model_name, result_name):
 
 
 def output_path(args, model_name, result_name):
-    experiment_name = model_name if args.denoise else f"{model_name}-denoise-off"
+    experiment_name = model_name if args.disable_unet else f"{model_name}-denoise-off"
     output_dir = args.results / experiment_name
     os.makedirs(output_dir, exist_ok=True)
     return output_dir / result_name
